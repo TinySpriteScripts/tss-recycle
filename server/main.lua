@@ -8,17 +8,49 @@ AddEventHandler('onResourceStart', function(resource)
     if GetCurrentResourceName() ~= resource then return end
 end)
 
+AddEventHandler('onResourceStop', function(resource)
+    if GetCurrentResourceName() ~= resource then return end
+    ActiveRecyclerUsers = {}
+    ActiveRecyclerLoops = {}
+end)
+
+local function GetLoopKey(identifier, citizenid)
+    if Config.UniqueStash then
+        return identifier .. ":" .. citizenid
+    else
+        return identifier
+    end
+end
+
+
+local function GetInputStashName(identifier, citizenid)
+    if Config.UniqueStash then
+        return 'recycler_input-' .. identifier .. citizenid
+    else
+        return 'recycler_input-' .. identifier
+    end
+end
+
+local function GetOutputStashName(identifier, citizenid)
+    if Config.UniqueStash then
+        return 'recycler_output-' .. identifier .. citizenid
+    else
+        return 'recycler_output-' .. identifier
+    end
+end
+
+
 local function StartRecyclingLoop(src, identifier, citizenid)
-    local key = identifier .. ":" .. citizenid
+    local key = GetLoopKey(identifier, citizenid)
     if ActiveRecyclerLoops[key] then return end -- already running
     local itemsProcessed = 0
 
     ActiveRecyclerLoops[key] = true
 
-    local inputStashName = 'recycler_input-' .. identifier .. citizenid
-    local outputStashName = 'recycler_output-' .. identifier .. citizenid
+    local inputStashName = GetInputStashName(identifier, citizenid)
+    local outputStashName = GetOutputStashName(identifier, citizenid)
 
-    exports.core_inventory:openInventory(src, outputStashName, 'recycler_output', nil, nil, false, nil, false) --used to load output inventory or create it if not created already
+    exports.core_inventory:openInventory(src, outputStashName, 'recycler_output', nil, nil, false, nil, false)
 
     CreateThread(function()
         while ActiveRecyclerUsers[identifier] and ActiveRecyclerUsers[identifier][citizenid] do
@@ -33,7 +65,6 @@ local function StartRecyclingLoop(src, identifier, citizenid)
                 if recycleData then
                     local removeCount = math.min(item.amount, 1)
 
-                    -- First check if all recycled materials can fit
                     local can_carry = true
                     local matAmounts = {}
 
@@ -47,12 +78,11 @@ local function StartRecyclingLoop(src, identifier, citizenid)
                         end
                     end
 
-                    if not can_carry then
+                    if not can_carry then -- removed UniqueStash check so it's always enforced
                         SendNotify(src, "Output Full", 'Your Recycler Cannot Output Any More Items', 'error')
                         goto continue
                     end
 
-                    -- Now safe to remove and add
                     exports.core_inventory:removeItem(inputStashName, item.name, removeCount)
                     DebugCode("removed item: "..item.name)
 
@@ -70,10 +100,11 @@ local function StartRecyclingLoop(src, identifier, citizenid)
         end
 
         ActiveRecyclerLoops[key] = nil
+        DebugCode("Stopped recycler loop: "..key)
     end)
 end
 
-QBCore.Functions.CreateCallback("tss-recycle:GetRecyclerState", function(source, cb, identifier)
+QBCore.Functions.CreateCallback("sayer-recycle:GetRecyclerState", function(source, cb, identifier)
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
@@ -92,7 +123,7 @@ QBCore.Functions.CreateCallback("tss-recycle:GetRecyclerState", function(source,
     cb(return_data)
 end)
 
-RegisterNetEvent('tss-recycle:OpenInputStash',function(data)
+RegisterNetEvent('sayer-recycle:OpenInputStash',function(data)
     local identifier = data.identifier
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
@@ -100,40 +131,45 @@ RegisterNetEvent('tss-recycle:OpenInputStash',function(data)
 
     local citizenid = Player.PlayerData.citizenid
 
-    exports.core_inventory:openInventory(src, 'recycler_input-'..identifier..citizenid, 'recycler_input', nil, nil, true, nil, false)
+    local inventoryString = GetInputStashName(identifier, citizenid)
+
+    exports.core_inventory:openInventory(src, inventoryString, 'recycler_input', nil, nil, true, nil, false)
 end)
 
-RegisterNetEvent('tss-recycle:OpenOutputStash',function(data)
+RegisterNetEvent('sayer-recycle:OpenOutputStash',function(data)
     local identifier = data.identifier
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
 
     local citizenid = Player.PlayerData.citizenid
+    local inventoryString = GetOutputStashName(identifier, citizenid)
 
-    exports.core_inventory:openInventory(src, 'recycler_output-'..identifier..citizenid, 'recycler_output', nil, nil, true, nil, false)
+    exports.core_inventory:openInventory(src, inventoryString, 'recycler_output', nil, nil, true, nil, false)
 end)
 
-RegisterNetEvent('tss-recycle:startRecycler', function(data)
+RegisterNetEvent('sayer-recycle:startRecycler', function(data)
     local identifier = data.identifier
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
     if not Player then return end
 
     local citizenid = Player.PlayerData.citizenid
-    identifier = tostring(identifier) -- ensure string key
+    identifier = tostring(identifier)
+    local inventoryString = GetInputStashName(identifier, citizenid)
 
-    local input_stash = exports.core_inventory:getInventory('recycler_input-'..identifier..citizenid)
-
-    if not ActiveRecyclerUsers[identifier] then ActiveRecyclerUsers[identifier] = {} end
-    ActiveRecyclerUsers[identifier][citizenid] = true
+    if Config.UniqueStash then
+        if not ActiveRecyclerUsers[identifier] then ActiveRecyclerUsers[identifier] = {} end
+        ActiveRecyclerUsers[identifier][citizenid] = true
+    else
+        ActiveRecyclerUsers[identifier] = true
+    end
     SendNotify(src, "Recycling Started", "Your Recycler is now turned on")
-    
+
     StartRecyclingLoop(src, identifier, citizenid)
-    -- Create a function or loop to handle when recyclers are turned on. it should take the items from input_stash and loop through them.
 end)
 
-RegisterNetEvent('tss-recycle:stopRecycler', function(data)
+RegisterNetEvent('sayer-recycle:stopRecycler', function(data)
     local identifier = data.identifier
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
@@ -142,16 +178,22 @@ RegisterNetEvent('tss-recycle:stopRecycler', function(data)
     local citizenid = Player.PlayerData.citizenid
     identifier = tostring(identifier)
 
-    if ActiveRecyclerUsers[identifier] then
-        ActiveRecyclerUsers[identifier][citizenid] = nil
-        SendNotify(src, "Recycling Stopped", "Recycler Has Stopped")
-        if next(ActiveRecyclerUsers[identifier]) == nil then
-            ActiveRecyclerUsers[identifier] = nil
+    if Config.UniqueStash then
+        if ActiveRecyclerUsers[identifier] then
+            ActiveRecyclerUsers[identifier][citizenid] = nil
+            if next(ActiveRecyclerUsers[identifier]) == nil then
+                ActiveRecyclerUsers[identifier] = nil
+            end
         end
+    else
+        ActiveRecyclerUsers[identifier] = nil
     end
+
+    ActiveRecyclerLoops[GetLoopKey(identifier, citizenid)] = nil -- added cleanup
+    SendNotify(src, "Recycling Stopped", "Your Recycler has been turned off") -- added consistency
 end)
 
-RegisterNetEvent('tss-recycle:StopBaseRecycler', function(identifier)
+RegisterNetEvent('sayer-recycle:StopBaseRecycler', function(identifier)
     local identifier = "base_prop_"..identifier
     local src = source
     local Player = QBCore.Functions.GetPlayer(src)
@@ -162,9 +204,23 @@ RegisterNetEvent('tss-recycle:StopBaseRecycler', function(identifier)
 
     if ActiveRecyclerUsers[identifier] then
         ActiveRecyclerUsers[identifier] = nil
+        ActiveRecyclerLoops[GetLoopKey(identifier, citizenid)] = nil -- cleanup added
         SendNotify(src, "Recycling Stopped", "Your Base Recycler Has Stopped")
     end
+end)
 
+AddEventHandler("playerDropped", function(reason)
+    local src = source
+    local Player = QBCore.Functions.GetPlayer(src)
+    if not Player then return end
+    local cid = Player.PlayerData.citizenid
+    for id, users in pairs(ActiveRecyclerUsers) do
+        if users[cid] then
+            users[cid] = nil
+            if next(users) == nil then ActiveRecyclerUsers[id] = nil end
+            ActiveRecyclerLoops[GetLoopKey(id, cid)] = nil
+        end
+    end
 end)
 
 AddEventHandler("playerDropped", function(reason)
